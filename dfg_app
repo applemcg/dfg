@@ -1,0 +1,766 @@
+argnumber () 
+{ 
+    : returns argument position of first arg;
+    : ~ match ... ?match ...;
+    : date: 2018-10-29;
+    : date: 2020-11-14;
+    let i=0;
+    for a in ${@:2};
+    do
+        let i=$i+1;
+        [[ $a == $1 ]] && { 
+            echo $i;
+            return
+        };
+    done;
+    echo 0
+}
+cdx () 
+{ 
+    : removes duplicates from directory stack list;
+    : date: 2017-07-10;
+    : date: 2018-05-17;
+    : date: 2020-03-20 major reorganization;
+    :;
+    function _cds () 
+    { 
+        : collect unique directory stack;
+        awk '
+    	 !p[$0]++ {
+            gsub(/\\*  */,"\\ ")
+	    line[nr++] = $0
+	    }
+        END {
+	      # pre-decrement since post increment
+	      # GT 0 since dirs -c leaves the 0th directory
+	      while(--nr > 0) print line[nr]
+	    }
+    '
+    };
+    function _esc () 
+    { 
+        : writes command to quiety tuck each directory down the stack;
+        : exposing the stack on completion;
+        awk '
+        { printf "pushd %s > /dev/null; pushd >/dev/null\n", $0 }
+    END { printf "dirs\n" }	
+    '
+    };
+    set -- $(needir ~/tmp)/.{dirs,source};
+    dirs -p -l | _cds | tee $1 | _esc > $2;
+    dirs -c > /dev/null;
+    : clear all but the top of the stack;
+    source $2;
+    unset _{cds,esc};
+    rm -f $1 $2
+}
+column () 
+{ 
+    : PROJECT columns from named RDB -- first Row -- FIELDS;
+    : reads STDIN for RDB list or TABLE format,;
+    : date: 2019-07-02;
+    : date: 2019-08-14 added the BLANK columns, not yet in table;
+    : date: 2021-04-13;
+    : date: 2022-07-31;
+    : todo: colllect column making, script writing into functions;
+    : date: 2022-08-13;
+    :;
+    : -------------------------------------- begin template.fun --;
+    local HEAD;
+    local DASH;
+    local COL="";
+    local C;
+    local data=.$(myname).in;
+    debug "$*";
+    read HEAD;
+    [[ -z "$HEAD" ]] && { 
+        ( echo;
+        cat - ) | listtotable | column "$@" | tabletolist;
+        return 0
+    };
+    read DASH;
+    cat > $data;
+    debug HEAD: $HEAD, DASH: $DASH;
+    : ---------------------------------------- end template.fun --;
+    : default to HEADER fields;
+    local tomatch=":";
+    for h in $HEAD;
+    do
+        tomatch=":$h:$tomatch";
+    done;
+    debug "tomatch: $tomatch";
+    set -- ${@:-$HEAD};
+    debug "ARGS: $@";
+    for ARG in $@;
+    do
+        local a=":$ARG:";
+        if [[ $tomatch == *"$a"* ]]; then
+            debug "the column is in the table, which field";
+            (( C = 1 ));
+            for I in $HEAD;
+            do
+                [[ "$I" = "$ARG" ]] && { 
+                    COL="${COL},\$$C";
+                    debug "IN Table, C, COL: $C, $COL";
+                    break
+                };
+                (( C += 1 ));
+            done;
+        else
+            debug "the column is NOT in Table, COL: $COL";
+            COL="${COL},blank";
+        fi;
+        debug "COL: $COL";
+    done;
+    COL=${COL#,};
+    debug "COL: $COL";
+    pause;
+    rdb_hdr $@;
+    local script="
+        BEGIN {
+	        FS = OFS = \"\t\";
+		blank = \"\";
+
+	      }; 
+              { 
+                print $COL; 
+              }
+    ";
+    debug "script: $script";
+    cat $data | awk -F'\t' "$script"
+}
+compute () 
+{ 
+    : date: 2017-06-20;
+    : date: 2021-07-05;
+    : date: 2021-07-16;
+    :;
+    local COLIN;
+    local COLOUT;
+    read HEAD;
+    if test -z "$HEAD"; then
+        ( echo;
+        cat ) | listtotable | compute "$@" | tabletolist;
+        return 0;
+    fi;
+    read DASH;
+    rdb_hdr $HEAD;
+    (( C = 1 ));
+    for I in $HEAD;
+    do
+        COLIN="$COLIN $I=\$$C;";
+        COLOUT="$COLOUT \$$C=$I;";
+        (( C += 1 ));
+    done;
+    : trace_call "IN, cmd, OUT: $COLIN; $cmmd; $COLOUT";
+    local awklib='
+       function max(x,y) { return (x>y?x:y) }
+       function min(x,y) { return (x<y?x:y) }
+       function abs(x)   { return (x<0?-x:x) }
+    ';
+    : insight: 2nd arg is an ENDBLOCK,;
+    :;
+    local endblock="${2:-exit}";
+    :;
+    case $endblock in 
+        exit)
+
+        ;;
+        *)
+            pptlog "$(myname 2) $(myname) $# ENDBLOCK: $endblock" >> $(lib)/log/compute.log
+        ;;
+    esac;
+    [[ -n "$COLIN" ]] && { 
+        awk "
+        $awklib
+        BEGIN   { FS=OFS=\"\t\"}; { $COLIN $1; $COLOUT print }; END { $endblock; }"
+    }
+}
+debug () 
+{ 
+    return
+}
+dfg () 
+{ 
+    : Directory Function Grep;
+    : related: f2file dfg .;
+    : date: 2020-10-03;
+    : date: 2020-12-06;
+    : date: 2021-03-06 default is now UNRETIRED;
+    : date: 2021-08-02;
+    : lesson: dont PAUSE in here;
+    : date: 2022-05-14;
+    debug ENTRY $*;
+    local dir=$(dfg_db);
+    debug DIR: $dir;
+    runfrom $dir $@ || { 
+        debug return RUNFROM $*;
+        return
+    };
+    : only files -- functions -- in library directories;
+    debug REMOVING $*;
+    rm -fr $(find */* -type d);
+    debug REMOVED $*;
+    dfg_rd "${1:-dfg}" | column | sorttable fun
+}
+dfg_all () 
+{ 
+    : all DFG library functions;
+    ${*:-echo} dfg \
+               dfg_{all,{clean,short}context,dupdef,dups,example} \
+               dfg_{f{ield,un{,ctions}},help,hint} \
+               dfg_{load,rd,todo}
+}
+dfg_cleancontext () 
+{ 
+    : clear abstract and function definitions from CONTEXT;
+    : date: 2021-04-30;
+    report_notpipe && return 1;
+    row 'context !~ /^:/ && context !~ /[(][)]/'
+}
+dfg_db () 
+{ 
+    : where the DFG data is kept,;
+    : a directory of functionlib directories,;
+    : each with a file for each function.;
+    : date: 2022-01-02;
+    : date: 2022-02-21;
+    : date: 2022-02;
+    : date: 2022-05-14;
+    debug ENTRY $*;
+    ${*:-echo} $(home)/lib/dir
+}
+dfg_dupdef () 
+{ 
+    : those functions defined in more than one library;
+    : date: 2022-02-19;
+    function _dupdef () 
+    { 
+        ls */* | sawk '{ print $NF }' | sort | uniq -c | awk '$1 > 1 {print $2}'
+    };
+    indir $(dfg_db) _dupdef
+}
+dfg_dups () 
+{ 
+    : date: 2021-10-12;
+    runfrom $(dfb_db) || return;
+    ls */* | grep -f <(duplicate_functions) | grep retiredlib | sed s/retiredlib/*/ | while read line; do
+        echo $line;
+        diff $line;
+        echo;
+    done
+}
+dfg_example () 
+{ 
+    : date: 2021-07-19;
+    shd_latest $(dfg xargs | short_context | column fun | headoff | sort -u) | sort
+}
+dfg_fun () 
+{ 
+    : Data Function Grep;
+    : date: 2020-10-15;
+    if_missingargs 1 $* && return 1;
+    dfg $1 | sorttable fun
+}
+dfg_functions () 
+{ 
+    : list the functions matching a DFG;
+    : date: 2021-03-09;
+    report_notpipe && return 1;
+    column fun | headoff | sort -u
+}
+dfg_help () 
+{ 
+    : date: 2021-08-01;
+    sfg dfg_;
+    comment e.g. dfg_z[hint,todo}
+}
+dfg_hint () 
+{ 
+    : date: 2021-02-07;
+    dfg | justify
+}
+dfg_load () 
+{ 
+    : save functions in DFG_DB and link library to;
+    : date: 2021-10-31;
+    f2file $1;
+    ln -f $1 ~/Library/bin
+}
+dfg_rd () 
+{ 
+    : search in DIR and Dot.DIR files for the argument;
+    : date: 2022-05-14;
+    debug ENTRY $*;
+    dfg_fields rdb_hdr;
+    grep -i "$1" .*_profile/* */* | sed 's/\//	/; s/: */	/'
+}
+dfg_shortcontext () 
+{ 
+    : clear abstract and function definitions from CONTEXT;
+    : date: 2021-04-30;
+    : date: 2022-06-16;
+    report_notpipe && return 1;
+    local clength=${1:-57};
+    compute "context = substr(context,1,$clength)"
+}
+dfg_todo () 
+{ 
+    : date: 2021-08-01;
+    dfg todo:
+}
+home () 
+{ 
+    : moved to APP_HOME in users .profile, defaulting to HOME;
+    : installed app users, e.g. todo, backup, should set APP_HOME;
+    : date: 2022-04-09;
+    : date: 2022-05-22;
+    :;
+    ${*:-echo} ${APP_HOME:=$HOME}
+}
+indir () 
+{ 
+    : date: 2017-05-29;
+    : date: 2018-10-09;
+    : debug $*;
+    : date: 2021-12-06;
+    : date: 2022-05-03;
+    : lesson: any PUSH, POP, CDX may leave nothing on STDOUT.;
+    : date: 2022-05-07;
+    report_notdirectory $1 && return 1;
+    debug ENTRY $*;
+    local dir=$1;
+    shift;
+    pushd $dir > /dev/null;
+    debug EVAL $*;
+    pause;
+    eval ${@};
+    pushd 1>&2 > /dev/null;
+    cdx > /dev/null
+}
+isint () 
+{ 
+    : TRUE if first arg IS an INTEGER;
+    : ref: https://stackoverflow.com/questions/24412721/...;
+    : ... elegant-solution-to-implement-timeout-for-bash-commands-and-functions/24413646;
+    : date: 2020-05-17;
+    : date: 2020-11-14;
+    [ "$1" != "" -a "${1//[0-9-]}" = "" ]
+}
+lib () 
+{ 
+    : a big fuss over ALT_HOME not in the ENVIRONMENT;
+    : todo: see if we can eliminate its use in sh-bang;
+    : app_trace home: $(home);
+    : app_trace ALT_HOME: ${ALT_HOME};
+    : date: 2022-02-21;
+    : date: 2022-02-23;
+    ${*:-echo} $(home)/lib
+}
+listtotable () 
+{ 
+    : reads stdin or named files in LIST format, converting to TABLE;
+    : to relieve a possible non-EMPTY Line at the END of the file, added flushed;
+    : an awkism "!flushed" is not the same as "flushed > 0";
+    : todo: functions totable and tolist, take either, convert only as requird;
+    : 2020-09-06: added flushed. still needs a separate test .;
+    : date: 2016-06-09;
+    awk '
+#    
+# ------------------------------------------------------- awk functions	--
+#
+    function concat(var,str) { return ((var)? (var OFS str): (str)); }
+
+    function posset(n)       {
+	#
+        # -------------- store the field position names for later fetch	--
+        if(!posget[n]) {
+
+	    posget[n]=++nf
+        }
+        return posget[n]
+    }
+
+    function send(f,i)    {
+
+    printf f, field[i]; 
+    # print i, field[i] > stderr
+    field[i]=""
+}
+    function eachRecord() {
+
+         if (!head) { printf "%s\n%s", HEAD, DASH; head=1 }
+
+                         send("\n", "")  # preceed with a newline.
+                         send("%s",i=1)  # send all fields,
+         while(++i<=nf)  send("\t%s",i)  # some may have blanks
+
+         print "# RECORD, NR,NF,flushed: " NR, NF, flushed, $0 > stderr
+
+         flushed = 0
+       }
+# --------------------------------------------------------- listtotable	--
+BEGIN  {
+         FS = OFS = "\t";
+	 stderr = ".awk.err";
+       }
+
+NF < 1 { if (NR>1) { eachRecord();  next; }; }
+ 
+head != 1 && $1 != "" {
+
+         HEAD = concat(HEAD, $1)
+         DASH = concat(DASH, substr("--------------",1,length($1)))
+         field[posset($1)] = $2
+         next
+       }
+       { field[posget[$1]] = $2
+         flushed++
+       }
+       
+END    {
+         if(flushed > 0) eachRecord()
+	 printf "\n"
+       }       
+    ' | awk NF
+}
+loglib () 
+{ 
+    : date: 2021-07-05;
+    : date: 2021-07-16;
+    ${@:-echo} $(home)/lib/log
+}
+mkdir () 
+{ 
+    : implements the -p flag by default;
+    : date: 2020-03-04;
+    : date: 2022-05-29;
+    function _mkdir () 
+    { 
+        for f in $*;
+        do
+            mkdir $f;
+        done
+    };
+    case $1 in 
+        -p)
+            _mkdir ${*:2};
+            return
+        ;;
+        -v)
+            _mkdir ${*:2};
+            echo ${*:2};
+            return
+        ;;
+        -m)
+            mkdir $3;
+            chmod $2 $3;
+            return
+        ;;
+    esac;
+    [[ -d $1 ]] && return;
+    : debug $*;
+    mkdir $(dirname $1);
+    command mkdir $1;
+    unset _mkdir
+}
+myname () 
+{ 
+    : e.g. myname "[n, default 1]";
+    : returns name of caller OR callers caller ...;
+    : date: 2018-02-16;
+    : date: 2021-02-18 attempt to accomodate zsh;
+    : date: 2022-04-29;
+    echo ${FUNCNAME[${1:-1}]}
+}
+needir () 
+{ 
+    : date: 2017-05-29;
+    : makes non-existent directory argument and returns name;
+    : date: 2018-02-16;
+    : date: 2020-03-04;
+    : date: 2022-08-02;
+    : date: 2022-08-13;
+    report_notargcount 1 $# needed_directory && return 1;
+    debug ENTRY $1;
+    [[ -d "$1" ]] || mkdir -p "$1";
+    echo "$1"
+}
+pause () 
+{ 
+    return
+}
+pptlog () 
+{ 
+    : date: 2017-05-11;
+    : date: 2019-04-09 added calling function log;
+    : date: 2021-07-05;
+    : date: 2021-07-16;
+    date "+%F%t%a %b %d%t%T%t$1%t${*:2}" >> $(loglib)/$(myname 2).log
+}
+rcat () 
+{ 
+    : in place of cat command where we can afford to wait,;
+    : rather than in RDB infinite recursion thru testing;
+    : for table or list format file;
+    : date: 2020-05-17 users now HANG waiting for input, preferred over run-away;
+    : date: 2020-05-17;
+    : date: 2020-05-18;
+    : date: 2020-11-14;
+    :;
+    [[ -p /dev/stdin ]] && { 
+        cat -;
+        return
+    };
+    read line;
+    [[ -n "$line" ]] && { 
+        echo "$line";
+        cat -;
+        return
+    };
+    : never get here, the above READ hangs;
+    run_with_timeout 5 cat
+}
+rdb_hdr () 
+{ 
+    : date: 2017-05-12;
+    : debug $*;
+    : first the names, then equal-width dashes,;
+    : with one or more, spaces to a single TAB;
+    : date: 2022-05-29;
+    ( echo $*;
+    echo $* | tr 'a-zA-Z0-9_' '-' ) | sed 's/  */ /g' | tr ' ' '\t'
+}
+reading () 
+{ 
+    : date: 2021-02-21;
+    : date: 2022-02-22;
+    ${*:-echo} $(home)/git/applemcg.github.io/reading
+}
+report_exceedargcount () 
+{ 
+    : date: 2018-02-16;
+    : date: 2020-03-04;
+    : debug $*;
+    : date: 2020-11-14;
+    : date: 2022-06-23;
+    [[ $1 -gt $2 ]] && { 
+        report_usage need no more than $1 arg/s: ${*:3};
+        return 1
+    }
+}
+report_notargcount () 
+{ 
+    : date: 2018-02-16;
+    : date: 2021-08-17;
+    : date: 2021-08-18;
+    : date: 2022-04-29;
+    : date: 2022-06-14;
+    debug "$#: $*";
+    [[ $2 -ge $1 ]] && return 1;
+    report_usage need at least $1 arg/s: ${*:3}
+}
+report_notdirectory () 
+{ 
+    : date: 2018-02-16;
+    : date: 2018-10-09;
+    [[ -d $1 ]] && return 1;
+    report_usage $1 "ISN'T" a Directory ${@:2}
+}
+report_notpipe () 
+{ 
+    : returns: TRUE when STDIN "ISN'T" a pipe;
+    : ... FALSE if stdin is a pipe;
+    : date: 2018-02-16;
+    [[ -p /dev/stdin ]] && return 1;
+    report_usage "ISN'T" reading a pipe
+}
+report_usage () 
+{ 
+    : writes: usage message of report_... caller FAILURE to STDERR;
+    : date: 2018-03-30;
+    : date: 2022-04-29;
+    local caller=$(myname 3);
+    : case $caller in;
+    : diff_pair;
+    : callStack;
+    : read -p "HALT, use ctrl-C" < /dev/tty > /dev/tty;
+    :;
+    : esac;
+    echo USAGE $caller: $* 1>&2
+}
+row () 
+{ 
+    : SELECT rows matching argument criteria,;
+    : expressed as AWK pattern. e.g. "date > 20170210";
+    : where "date" in this case is a field name in table header;
+    : reads STDIN for RDB list or TABLE format,;
+    : date: 2017-05-11;
+    : date: 2020-05-17 RCAT replaces CAT;
+    : date: 2022-05-27;
+    : date: 2022-06-23;
+    :;
+    : an empty first row is assumed to be in LIST format;
+    : date 2017-02-10;
+    local COL="";
+    local HEAD;
+    local DASH;
+    report_exceedargcount 1 $# "field ~ /pattern/ || ..." && return 2;
+    read HEAD;
+    [[ -z "$HEAD" ]] && { 
+        debug $*;
+        ( echo;
+        rcat ) | listtotable | row "$@" | tabletolist;
+        return 00
+    };
+    read DASH;
+    rdb_hdr $HEAD;
+    (( C = 1 ));
+    for I in $HEAD;
+    do
+        COL="$COL $I=\$$C;";
+        (( C += 1 ));
+    done;
+    : debug 1: $1, COL: $COL;
+    [[ -n "$COL" ]] && { 
+        : comment awk "BEGIN { FS = OFS = \"\t\" }; { $COL } $1 { print }";
+        awk "BEGIN { FS = OFS = \"\t\" }; { $COL }; $1 { print }"
+    }
+}
+run_with_timeout () 
+{ 
+    : supplies FUNCTION timeout with CMD args...;
+    : usage: "run_with_timeout [N {10}] cmd args ...";
+    : ref: https://stackoverflow.com/questions/24412721/elegant-solution-to-implement-timeout-for-bash-commands-and-functions/24413646;
+    : date: 2020-05-17;
+    : date: 2020-11-14;
+    report_notargcount 1 $#;
+    local time=10;
+    isint $1 && { 
+        time=$1;
+        shift
+    };
+    : Run in a subshell to avoid job control messages;
+    ( "$@" & child=$!;
+    : Avoid default notification in non-interactive shell for SIGTERM;
+    trap -- "" SIGTERM;
+    ( sleep $time;
+    kill $child 2> /dev/null ) & wait $child )
+}
+runfrom () 
+{ 
+    : usage: ~ DIRECTORY function args OR return;
+    : date: 2019-09-10;
+    : date: 2020-02-04 simplify, test using indir;
+    : read_devtty ENTERING: $PWD, $*;
+    : date: 2020-09-21;
+    : date: 2022-03-20;
+    : date: 2022-05-07;
+    : lesson: dont PAUSE in here, there are a few others, too;
+    : date: 2022-05-14;
+    debug ENTRY $*;
+    local ldir=$(indir $1 pwd);
+    debug testING PWD: $PWD, ldir: $ldir;
+    [[ $PWD = $ldir ]] && return;
+    debug HUNTING: $PWD, DIR: $1.;
+    pushd $1 > /dev/null;
+    shift;
+    local cmd=$(myname 2);
+    debug RUNNING: $PWD, cmd: $cmd, $#: $@;
+    $cmd $@;
+    debug HAVE RUN: $PWD, $#: $@;
+    pushd > /dev/null;
+    cdx 1>&2;
+    debug CLEARED: $PWD, $#: $@;
+    return 1
+}
+sawk () 
+{ 
+    : date: 2016-10-06;
+    : date: 2017-07-18;
+    awk -F/ "$@"
+}
+sorttable () 
+{ 
+    : sort /RDB table according to books p. 398;
+    : single lettter with following arg TkSo;
+    : todo: accomodate field NAMES;
+    : date: 2020-04-11;
+    : simple rd sort $*;
+    read HEAD;
+    [[ -z "$HEAD" ]] && { 
+        ( echo;
+        cat ) | listtotable | sorttable "$@" | tabletolist;
+        return 0
+    };
+    read DASH;
+    : sort -t ...;
+    ARGS="";
+    while [ -n "$1" ]; do
+        case $1 in 
+            --*)
+                : eschew or IGNORE -- args;
+                continue
+            ;;
+            -t)
+                : -t is a TAB, none other;
+                continue
+            ;;
+            -[koST])
+                : allow -k N args, prefer Column Name;
+                ARGS="$ARGS $1 $2";
+                shift
+            ;;
+            -*)
+                ARGS="$ARGS $1"
+            ;;
+            *)
+                : detect Column Name;
+                local argn=$(argnumber $1 $HEAD);
+                [[ $argn == 0 ]] && continue;
+                ARGS="$ARGS -k $argn"
+            ;;
+        esac;
+        shift;
+    done;
+    rdb_hdr $HEAD;
+    sort -t'	' $ARGS
+}
+tabletolist () 
+{ 
+    : convert TABLE format to LIST format;
+    : use in format-smart functions -- e.g. row, column, ...;
+    : todo: functions totable and tolist, take either, convert only as required;
+    : date: 2016-06-09;
+    awk '
+
+        BEGIN { FS = OFS = "\t" }
+
+        NR == 1 {
+                   for (i=1; i<=NF; i++) {
+                       number[$i] = i
+                       name[i] = $i
+                       }
+                   Fields = NF
+		   printf "\n"
+                   next
+                }
+
+        NR > 2  { for (i=1; i<=Fields; i++)
+                       printf "%s\t%s\n", name[i], $i
+                  printf "\n"
+		  printed = 1
+                }
+	# ------------------------- for the empty table	-- 	
+	END     {
+
+                  if( !printed) {
+
+                     for (i=1; i<=Fields; i++) {
+                          printf "%s\t%s\n", name[i], ""
+                     }		       
+                     printf "\n"
+		 }
+        }
+        ' $*
+}
